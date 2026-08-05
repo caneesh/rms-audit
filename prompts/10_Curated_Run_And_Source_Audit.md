@@ -1,32 +1,110 @@
-# Prompt 10 — Instrument Curated: run and source audit
+# Prompt 10 — Instrument Curated shell scripts: run and source audit
 
-Add run-level and source-level audit to the Curated pipeline using the SAME AuditWriter
-(layer='CURATED'). Do not change transformations or business logic. Kill switch applies.
+Add run-level and source-level audit to the Curated pipeline shell scripts using the
+audit shell library (prompt 03b). Layer='CURATED'. Kill switch applies.
 
-At pipeline start: run_id, startRun (pipeline_name = the curated pipeline,
-spark_application_id from SparkContext).
+Do not change HiveQL transformations or business logic. If AUDIT_ENABLED=false, behavior
+must be identical to today's.
 
-Per source Raw table read (one audit_source_control row-pair per source table per run):
-- source_type='TABLE', source_name = raw table, batch_id per curated target run.
-- watermark_start / watermark_end = the incremental window actually used (from prompt 09
-  findings).
-- input_count = rows read from the Raw source within the window — count the persisted
-  source DataFrame once; never scan the Raw table twice.
+## At pipeline start (master script)
 
-Add lineage: for each Curated target written, call writeLineage with one row per
-contributing Raw source batch (join audit_source_control on the Raw side by table +
-window to find the source batch ids; if that lookup is ambiguous, record source_name +
-window and leave source_batch_id null — do not guess).
+```bash
+source ${AUDIT_LIB_PATH}/audit_functions.sh
+audit_init || { fnLogMsg ERROR "Audit init failed"; }  # continue even if audit fails
 
-Add the two tracking columns to Curated writes: _audit_run_id, _audit_batch_id
-(schema change confirmed in prompt 09; if a table cannot take the columns, record that
-table in the response and audit it at batch level only).
+RUN_ID=$(audit_generate_run_id)
+audit_start_run "CURATED" "${RUN_ID}" "${PIPELINE_NAME}" "${PROCESS_NAME}" "${SOURCE_SYSTEM}"
+```
 
-Per Curated target table: stage_summary row with input/expected/actual counts using the
-same persist-once / count-once discipline as Raw. Validation of written counts follows
-the apply mechanism found in prompt 09 (e.g., count the overwritten partition, or rows
-tagged with this _audit_batch_id — now possible because Curated carries the column).
+Note: There is no `spark_application_id` in shell. Leave that column NULL or capture the
+YARN application ID if beeline exposes it (check `hivebeeline` output for app ID).
 
-At end: completeRun / failRun with totals.
+## Per source table processed
 
-Show modified sections as diffs with one-line safety justifications.
+Before processing each source (inside the table loop):
+```bash
+BATCH_ID=$(audit_generate_batch_id "${RUN_ID}" "${table_name}")
+input_count=$(audit_get_count "SELECT COUNT(*) FROM ${source_table} WHERE ${watermark_condition}")
+audit_start_source "CURATED" "${RUN_ID}" "${BATCH_ID}" "TABLE" "${source_table}" \
+  "" "" "" "" "${watermark_start}" "${watermark_end}" "${input_count}"
+```
+
+Watermark values come from the trigger file or partition parameters found in prompt 09.
+
+## Per target table written
+
+After each MERGE or INSERT completes:
+```bash
+actual_count=$(audit_get_count "SELECT COUNT(*) FROM ${target_table} WHERE _audit_batch_id='${BATCH_ID}'")
+# OR if no audit columns yet: count the partition just written
+audit_write_stage_summary "CURATED" "${RUN_ID}" "${BATCH_ID}" "${source_table}" \
+  "MERGE" "${target_table}" "${input_count}" "${expected_count}" "${actual_count}" ...
+```
+
+## Lineage
+
+For each Curated target, record which Raw batches contributed. Query the Raw layer's
+`audit_source_control` to find batch_ids that overlap the watermark window:
+```bash
+# Find Raw batches that fed this Curated batch
+raw_batches=$(hivebeeline --silent=true -e "
+  SELECT DISTINCT batch_id 
+  FROM ${AUDIT_DB}.audit_source_control 
+  WHERE layer='RAW' 
+    AND source_name='${raw_table}'
+    AND status='COMPLETED'
+    AND watermark_end >= '${curated_watermark_start}'
+    AND watermark_start <= '${curated_watermark_end}'
+")
+for raw_batch in ${raw_batches}; do
+  audit_write_lineage "CURATED" "${RUN_ID}" "${BATCH_ID}" "${target_table}" \
+    "RAW" "${raw_run_id}" "${raw_batch}" "${raw_table}"
+done
+```
+
+If the lookup is ambiguous or too expensive, record source_name + window and leave
+source_batch_id NULL — do not guess.
+
+## Schema change: add audit columns to Curated tables
+
+If prompt 09 confirmed schema changes are allowed, modify the Curated DDL to add:
+- `_audit_run_id STRING`
+- `_audit_batch_id STRING`
+
+And modify the MERGE/INSERT HQL to populate them:
+```sql
+-- In the MERGE or INSERT ... SELECT
+SELECT 
+  ...,
+  '${run_id}' AS _audit_run_id,
+  '${batch_id}' AS _audit_batch_id
+FROM ...
+```
+
+Pass via `--hivevar run_id=${RUN_ID} --hivevar batch_id=${BATCH_ID}`.
+
+If a table cannot accept the columns, note it and audit at batch level only.
+
+## At pipeline end
+
+```bash
+# Aggregate totals from this run
+total_sources=$(audit_get_count "SELECT COUNT(DISTINCT source_name) FROM ${AUDIT_DB}.audit_source_control WHERE run_id='${RUN_ID}'")
+completed_sources=$(audit_get_count "SELECT COUNT(*) FROM ${AUDIT_DB}.audit_source_control WHERE run_id='${RUN_ID}' AND status='COMPLETED'")
+failed_sources=$(audit_get_count "SELECT COUNT(*) FROM ${AUDIT_DB}.audit_source_control WHERE run_id='${RUN_ID}' AND status='FAILED'")
+
+if [ ${failed_sources} -gt 0 ]; then
+  audit_fail_run "${RUN_ID}" "${total_sources}" "${completed_sources}" "${failed_sources}" "Some sources failed"
+  exit 1
+else
+  audit_complete_run "${RUN_ID}" "${total_sources}" "${completed_sources}" "0"
+fi
+```
+
+## Deliverables
+
+1. Modified master shell script with audit calls at run boundaries
+2. Modified table-loop section with source/stage audit calls
+3. HQL modifications to populate `_audit_run_id`, `_audit_batch_id`
+4. Lineage capture logic
+5. Show modified sections as diffs with one-line safety justifications
