@@ -25,11 +25,14 @@ MQ  →  HDFS Sequence Files  →  XMLToHive  →  13 Raw tables
                                                   |
                                    (1-to-1)  Curated tables
                                                   |
-                                (1-to-many)  Gold tables
+                              (many-to-many)  Gold tables
 ```
 
 - Raw → Curated is one-to-one (each Curated table reads specific Raw tables).
-- Curated → Gold fans out (one Curated table can feed multiple Gold tables).
+- Curated → Gold is **many-to-many**: one Curated table feeds several Gold tables
+  (fan-out), *and* one Gold table is assembled from several Curated tables (fan-in).
+  This is the hardest part of the Gold audit and it has its own design note —
+  see `GOLD_FANOUT_DESIGN.md`.
 
 ---
 
@@ -48,6 +51,13 @@ All three layers write to the **same** audit tables. A `layer` column ('RAW', 'C
 | `audit_reconciliation` | entity, per layer hop | Raw = Curated + rejected + filtered? Curated vs Gold? |
 | `audit_lineage` | batch-to-batch edge | Which Raw batches fed which Curated batch fed which Gold batch? |
 | `audit_error_detail` | individual error | What exactly failed, in which file/message/table? |
+
+Plus one **reference** table, which is config rather than events (no `layer`, not
+append-only):
+
+| Table | One row per… | Answers |
+|---|---|---|
+| `audit_gold_source_map` | Curated→Gold edge | Which Curated tables feed this Gold table, which one drives its row count, and what must be built first? |
 
 ---
 
@@ -106,10 +116,18 @@ rollback plan.
   named reason for every difference. An unexplained difference fails the run.
 
 ### Gold
-- Same run/source pattern; `source_control` records Curated inputs + processing window.
+See `GOLD_FANOUT_DESIGN.md` for the many-to-many handling; the essentials:
+- Same run/source pattern, but **a batch is one Gold target build, not one source read**.
+  A Gold table assembled from N Curated inputs gets N `source_control` rows sharing one
+  `batch_id`, which is what keeps `_audit_batch_id` on the Gold row single-valued.
+- Before building, verify **every** mapped Curated input completed for the window. A
+  missing input makes the table silently stale, not obviously wrong.
+- `source_control` records Curated inputs + processing window.
 - Entity counts per Gold table → `stage_summary`. SCD1/SCD2/PIT activity → `merge_summary`.
   Referential-integrity checks → `audit_rule_result` (rule_type = 'RI').
-- Reconciliation per entity across Curated → Gold, with expected fan-out reasons.
+- Reconciliation is **per (Curated table → Gold table) edge**, on distinct natural keys
+  rather than row counts, and only for DRIVER sources. Enrichment and lookup sources are
+  audited as RI rules instead. Never sum across edges.
 - **Lineage is batch-level, not row-level.** `audit_lineage` stores which source batches
   produced which target batches. Row-level tracing works by joining on the `_audit_run_id`
   / `_audit_batch_id` columns carried in Curated and Gold rows plus business keys
@@ -124,7 +142,7 @@ rollback plan.
 | Raw tables | **None.** Frozen. | XMLToHive gains audit calls + staging write path |
 | Curated tables | Add `_audit_run_id`, `_audit_batch_id` columns | Audit calls, rule counting, reconciliation |
 | Gold tables | Add `_audit_run_id`, `_audit_batch_id` columns | Audit calls, RI checks, lineage, reconciliation |
-| New | 8 audit tables in a dedicated audit database | `AuditWriter` + models, shared by all layers |
+| New | 8 audit event tables + `audit_gold_source_map` in a dedicated audit database | `AuditWriter` + models, shared by all layers |
 
 ---
 

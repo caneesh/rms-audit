@@ -2,30 +2,61 @@
 
 ## Curated → Gold reconciliation (audit_reconciliation)
 
-Same accounting-identity approach as prompt 13, per entity, with two Gold-specific twists:
+Same accounting-identity approach as prompt 13, but at a different grain. Read
+`docs/GOLD_FANOUT_DESIGN.md` §5 first. Three Gold-specific twists:
 
-### Twist 1: Fan-out is expected
+### Twist 1: Reconcile per EDGE, never per layer
 
-One Curated row may legitimately produce rows in multiple Gold tables, and SCD2 writes
-version rows. The identity is NOT raw row count = gold row count.
+Curated→Gold is many-to-many. "curated_member → GOLD" is not a checkable statement,
+because the same source table legitimately lands in several Gold targets under several
+different rules. So write **one `audit_reconciliation` row per (source table → target
+table) edge**, using the `source_name` and `target_table` columns added in prompt 02:
 
-Define the per-entity expected relationship explicitly:
-- "Curated members in scope = Gold member natural keys touched this batch"
-- "Curated coverage rows = Gold coverage current versions created or updated"
+| edge | expected relationship |
+|---|---|
+| curated_member → gold_member_dim | 1:1 on member key |
+| curated_member → gold_member_coverage | only members with active coverage; filter reason recorded |
+| curated_member → gold_member_addr_hist | SCD2; version rows expected to exceed keys |
 
-Record this in `expected_difference_reason`.
+Each edge carries its own `expected_difference_reason` (from the prompt 14 inventory) and
+is evaluated alone. **Never sum across edges** — a Curated table's count does not equal the
+total across the Gold targets it feeds.
 
-### Twist 2: All counts from existing audit data
+Only **DRIVER** edges get a reconciliation row. ENRICH and LOOKUP edges add columns rather
+than rows, so counting them is meaningless; their correctness is audited as RI rules in
+prompt 16. Read the roles from `audit_gold_source_map`.
+
+### Twist 2: Count distinct natural keys, not rows
+
+```
+distinct_source_keys_in_scope
+    = distinct_target_keys_touched + rejected_keys + filtered_keys
+```
+
+Row counts break in both directions: SCD2 inflates the target side with version rows, and
+a fan-in enrichment source with multiple rows per key inflates the source side. Distinct
+natural keys are stable under both.
+
+### Twist 3: All counts from existing audit data
 
 All counts come from numbers already computed during the run (`audit_stage_summary`,
 `audit_merge_summary`, `audit_rule_result`). NO new table scans.
 
 ```bash
-# source_count: Curated rows in scope (from source_control)
+# Loop over DRIVER edges only — one reconciliation row each
+for gold_table in $(audit_gold_targets_in_dependency_order); do
+  BATCH_ID=$(audit_generate_batch_id "${RUN_ID}" "${gold_table}")
+  curated_table=$(audit_gold_driver_for "${gold_table}")
+
+# source_count: Curated keys in scope for THIS edge.
+# Must be scoped to BATCH_ID: with fan-out, the same source_name appears under several
+# Gold batches, so summing across the run multiplies the source count by the fan-out.
 source_count=$(audit_get_count "
-  SELECT SUM(input_count) 
+  SELECT input_count
   FROM ${AUDIT_DB}.audit_source_control 
-  WHERE layer='GOLD' AND run_id='${RUN_ID}' AND source_name='${curated_table}'
+  WHERE layer='GOLD' AND run_id='${RUN_ID}'
+    AND batch_id='${BATCH_ID}' AND source_name='${curated_table}'
+  ORDER BY created_ts DESC LIMIT 1
 ")
 
 # target_count: Gold natural keys affected, NOT raw row count
@@ -48,10 +79,16 @@ rejected_count=$(audit_get_count "
 ")
 
 # filtered_count: intentional drops (dedup, inactive, etc.)
-# Build expected_difference_reason string as in prompt 13
+# Build expected_difference_reason string as in prompt 13 — one per EDGE, taken from the
+# prompt 14 per-edge relationship sentences
+done
 ```
 
 ### Write reconciliation
+
+One row per DRIVER edge. `source_name` and `target_table` are what make the row
+identifiable under fan-in and fan-out — without them, three rows for `curated_member`
+would be indistinguishable.
 
 ```sql
 INSERT INTO ${audit_db}.audit_reconciliation
@@ -61,6 +98,8 @@ SELECT
   '${entity_name}' AS entity_name,
   'CURATED' AS from_layer,
   'GOLD' AS to_layer,
+  '${curated_table}' AS source_name,
+  '${gold_table}' AS target_table,
   ${source_count} AS source_count,
   ${target_count} AS target_count,
   ${rejected_count} AS rejected_count,
@@ -114,7 +153,25 @@ recon_mismatched=$(audit_get_count "
   WHERE layer='GOLD' AND run_id='${RUN_ID}' AND status='MISMATCHED'
 ")
 
-# 6. Lineage written
+# 6. Lineage written — COMPLETE, not merely present.
+# Under fan-in, "at least one lineage edge exists" passes when 1 of 5 sources was recorded.
+# Compare the edge count per target against the declared source count in the map.
+lineage_incomplete=$(audit_get_count "
+  SELECT COUNT(*) FROM (
+    SELECT l.target_table
+    FROM (SELECT target_table, COUNT(*) AS c
+          FROM ${AUDIT_DB}.audit_lineage
+          WHERE layer='GOLD' AND run_id='${RUN_ID}'
+          GROUP BY target_table) l
+    JOIN (SELECT gold_table, COUNT(*) AS c
+          FROM ${AUDIT_DB}.audit_gold_source_map
+          WHERE is_active='Y'
+          GROUP BY gold_table) m
+      ON l.target_table = m.gold_table
+    WHERE l.c <> m.c) x
+")
+
+# Targets that completed a stage but wrote no lineage at all
 lineage_missing=$(audit_get_count "
   SELECT COUNT(DISTINCT target_table) 
   FROM ${AUDIT_DB}.audit_stage_summary 
@@ -134,7 +191,8 @@ fatal_errors=$(audit_get_count "
 # Evaluate gate
 if [ ${sources_incomplete} -gt 0 ] || [ ${blocking_rules_failed} -gt 0 ] || \
    [ ${ri_checks_failed} -gt 0 ] || [ ${merges_failed} -gt 0 ] || \
-   [ ${recon_mismatched} -gt 0 ] || [ ${lineage_missing} -gt 0 ] || [ ${fatal_errors} -gt 0 ]; then
+   [ ${recon_mismatched} -gt 0 ] || [ ${lineage_missing} -gt 0 ] || \
+   [ ${lineage_incomplete} -gt 0 ] || [ ${fatal_errors} -gt 0 ]; then
   
   error_reasons=""
   [ ${sources_incomplete} -gt 0 ] && error_reasons="${error_reasons}sources_incomplete:${sources_incomplete};"
@@ -143,6 +201,7 @@ if [ ${sources_incomplete} -gt 0 ] || [ ${blocking_rules_failed} -gt 0 ] || \
   [ ${merges_failed} -gt 0 ] && error_reasons="${error_reasons}merges_failed:${merges_failed};"
   [ ${recon_mismatched} -gt 0 ] && error_reasons="${error_reasons}recon_mismatched:${recon_mismatched};"
   [ ${lineage_missing} -gt 0 ] && error_reasons="${error_reasons}lineage_missing:${lineage_missing};"
+  [ ${lineage_incomplete} -gt 0 ] && error_reasons="${error_reasons}lineage_incomplete:${lineage_incomplete};"
   [ ${fatal_errors} -gt 0 ] && error_reasons="${error_reasons}fatal_errors:${fatal_errors};"
   
   audit_fail_run "${RUN_ID}" "${total_sources}" "${completed_sources}" "${sources_incomplete}" "${error_reasons}"
@@ -157,12 +216,19 @@ fi
 ## End-to-end reconciliation view
 
 Create a SQL view (or query in the ops pack) that joins the RAW→CURATED and CURATED→GOLD
-reconciliation rows per entity per day into one line:
+reconciliation rows into one line.
+
+**Grain: one row per Curated→Gold edge per day, not one row per entity per day.** Because
+of fan-out, a Curated entity feeding three Gold tables produces three lines — one per
+target, each with its own status and filter reasons. That is intended: collapsing them
+would hide which target is mismatched. The RAW→CURATED columns repeat across an entity's
+lines, so do not sum them.
 
 ```sql
 CREATE VIEW IF NOT EXISTS ${audit_db}.v_reconciliation_daily AS
 SELECT
   COALESCE(rc.entity_name, rg.entity_name) AS entity_name,
+  rg.target_table AS gold_table,
   TO_DATE(COALESCE(rc.created_ts, rg.created_ts)) AS load_date,
   
   -- RAW totals (from RAW source_control)
@@ -213,20 +279,26 @@ LEFT JOIN ${audit_db}.audit_reconciliation rc
   AND rs.load_date = TO_DATE(rc.created_ts)
   AND rc.from_layer = 'RAW' AND rc.to_layer = 'CURATED'
 
+-- Chain the hops on the Curated table itself: the target of RAW→CURATED is the source of
+-- CURATED→GOLD. Matching on entity_name alone would cross-join a Curated entity against
+-- every Gold edge that shares its name.
 LEFT JOIN ${audit_db}.audit_reconciliation rg
-  ON rc.entity_name = rg.entity_name
+  ON rc.target_table = rg.source_name
   AND TO_DATE(rc.created_ts) = TO_DATE(rg.created_ts)
   AND rg.from_layer = 'CURATED' AND rg.to_layer = 'GOLD';
 ```
 
-### Support query (single row per entity per day)
+### Support query (one row per Curated→Gold edge per day)
 
-This is the single row support looks at each morning per entity:
+This is what support looks at each morning. An entity with fan-out shows one line per Gold
+target, so a single mismatched target surfaces on its own line instead of being averaged
+away:
 
 ```sql
 -- Morning health check query
 SELECT 
   entity_name,
+  gold_table,
   load_date,
   raw_count,
   curated_count,
@@ -244,13 +316,16 @@ ORDER BY
     WHEN 'EXPLAINED' THEN 2 
     ELSE 3 
   END,
-  entity_name;
+  entity_name,
+  gold_table;
 ```
 
 ## Deliverables
 
-1. Curated → Gold reconciliation logic with fan-out handling
-2. Gold completion gate shell logic
-3. `v_reconciliation_daily` view DDL
+1. Per-edge Curated → Gold reconciliation, DRIVER edges only, counted in distinct natural
+   keys — with the per-edge `expected_difference_reason` taken from the prompt 14 inventory
+2. Gold completion gate shell logic, including the `lineage_incomplete` check against
+   `audit_gold_source_map`
+3. `v_reconciliation_daily` view DDL at edge grain
 4. Support health-check query
 5. Integration into Gold master script
