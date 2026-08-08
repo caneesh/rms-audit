@@ -214,7 +214,12 @@ blocking_failures=$(audit_get_count "
 
 if [ ${blocking_failures} -gt 0 ]; then
   fnLogMsg ERROR "Blocking rule failures for ${gold_table}"
-  audit_fail_source "${RUN_ID}" "${BATCH_ID}" "Blocking rule failures: ${blocking_failures}"
+  # Fail every source row open on this batch — a blocking failure abandons the whole
+  # target build, and under fan-in the batch has one open row per Curated input.
+  for curated_table in $(audit_gold_sources_for "${gold_table}"); do
+    audit_fail_source "${RUN_ID}" "${BATCH_ID}" "${curated_table}" \
+      "Blocking rule failures: ${blocking_failures}"
+  done
   continue
 fi
 

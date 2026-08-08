@@ -48,7 +48,7 @@ for source_table in ${tablesFromParams}; do
   
   if [ ${merge_result} -ne 0 ]; then
     fnLogMsg ERROR "MERGE failed for ${source_table}"
-    audit_fail_source "${RUN_ID}" "${BATCH_ID}" "MERGE failed with exit code ${merge_result}"
+    audit_fail_source "${RUN_ID}" "${BATCH_ID}" "${source_table}" "MERGE failed with exit code ${merge_result}"
     audit_write_error "CURATED" "${RUN_ID}" "${BATCH_ID}" "${source_table}" "MERGE" "" \
       "" "" "MERGE_FAILURE" "${merge_result}" "MERGE HQL failed" ""
     FAILED_SOURCES=$((FAILED_SOURCES + 1))
@@ -66,7 +66,7 @@ for source_table in ${tablesFromParams}; do
     "COMPLETED" "${stage_start}" "${stage_end}" ""
   
   # Complete source
-  audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${input_count}" "${actual_count}" "0" "1" "0"
+  audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${source_table}" "${input_count}" "${actual_count}" "0" "1" "0"
   COMPLETED_SOURCES=$((COMPLETED_SOURCES + 1))
   
 done

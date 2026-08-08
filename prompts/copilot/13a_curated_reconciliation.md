@@ -72,6 +72,7 @@ fi
 # Write reconciliation
 audit_write_reconciliation "CURATED" "${RUN_ID}" "${entity_name}" \
   "RAW" "CURATED" \
+  "${source_table}" "${target_table}" \
   "${source_count}" "${target_count}" "${rejected_count}" "${filtered_count}" \
   "$((source_count - target_count))" "${expected_reason}" "${unexplained}" \
   "${recon_status}"

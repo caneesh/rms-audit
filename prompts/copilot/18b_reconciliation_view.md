@@ -1,16 +1,23 @@
 # Prompt 18b — Create end-to-end reconciliation view
 
-Create a SQL view that shows the full RAW → CURATED → GOLD reconciliation on one line per entity per day.
+Create a SQL view that shows the full RAW → CURATED → GOLD reconciliation across layers.
 
-**This is the single row support looks at each morning.**
+**This is what support looks at each morning.**
+
+**Grain: one row per Curated→Gold edge per day**, not one row per entity per day. Because
+of fan-out, an entity feeding three Gold tables produces three lines — one per target, each
+with its own status and filter reasons. That is intended: collapsing them would hide which
+target is mismatched. The RAW and CURATED columns repeat across an entity's lines, so do
+not sum them.
 
 ```sql
 -- End-to-end reconciliation view
--- One row per entity per day showing counts across all layers
+-- One row per Curated→Gold edge per day showing counts across all layers
 
 CREATE VIEW IF NOT EXISTS ${audit_db}.v_reconciliation_daily AS
 SELECT
   COALESCE(raw_recon.entity_name, cur_recon.entity_name, gold_recon.entity_name) AS entity_name,
+  gold_recon.target_table AS gold_table,
   COALESCE(raw_recon.load_date, cur_recon.load_date, gold_recon.load_date) AS load_date,
   
   -- RAW layer
@@ -62,7 +69,7 @@ FROM (
 LEFT JOIN (
   -- RAW → CURATED reconciliation
   SELECT 
-    entity_name,
+    entity_name, source_name, target_table,
     TO_DATE(created_ts) AS load_date,
     source_count, target_count, rejected_count, filtered_count,
     expected_difference_reason, unexplained_difference, status
@@ -73,16 +80,19 @@ LEFT JOIN (
   AND raw_recon.load_date = cur_recon.load_date
 
 LEFT JOIN (
-  -- CURATED → GOLD reconciliation
+  -- CURATED → GOLD reconciliation, one row per edge
   SELECT 
-    entity_name,
+    entity_name, source_name, target_table,
     TO_DATE(created_ts) AS load_date,
     source_count, target_count, rejected_count, filtered_count,
     expected_difference_reason, unexplained_difference, status
   FROM ${audit_db}.audit_reconciliation
   WHERE from_layer = 'CURATED' AND to_layer = 'GOLD'
 ) gold_recon
-  ON cur_recon.entity_name = gold_recon.entity_name 
+  -- Chain on the Curated TABLE: the target of RAW→CURATED is the source of CURATED→GOLD.
+  -- Matching on entity_name alone would cross-join an entity against every Gold edge
+  -- that happens to share its name.
+  ON cur_recon.target_table = gold_recon.source_name
   AND cur_recon.load_date = gold_recon.load_date;
 ```
 
@@ -92,10 +102,12 @@ Also create a morning health check query:
 -- Morning health check: yesterday's run status
 SELECT 
   entity_name,
+  gold_table,
   raw_input,
   curated_count,
   gold_count,
   curated_filter_reasons,
+  gold_filter_reasons,
   curated_unexplained,
   gold_unexplained,
   overall_status
@@ -108,7 +120,11 @@ ORDER BY
     WHEN 'EXPLAINED' THEN 3 
     ELSE 4 
   END,
-  entity_name;
+  entity_name,
+  gold_table;
 ```
+
+An entity with fan-out shows one line per Gold target, so a single mismatched target
+surfaces on its own line instead of being averaged away.
 
 Create both the view DDL and the health check query.

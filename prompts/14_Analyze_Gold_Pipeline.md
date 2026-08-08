@@ -89,7 +89,7 @@ wrong rows.
 | `${current_date}`, `load_date` | the real partition column name and format on Gold tables |
 | `hivebeeline` | exact wrapper name and the flags it already passes |
 | `fnLogMsg` | exact signature, and whether it is sourced or defined inline |
-| `${BLOCKING_RULES}`, `${REJECTING_RULES}` | which rule failures should stop a load — ask if unclear, do not invent |
+| `${BLOCKING_RULES}`, `${REJECTING_RULES}`, `${FILTERING_RULES}` | which rule failures stop a load, which reject rows, which are intentional filters — ask if unclear, do not invent |
 | SCD action column | the column the SCD logic sets (`scd_action` in prompt 16 is a placeholder) |
 | Hive / Spark version | whether `MERGE INTO` and window functions are available |
 

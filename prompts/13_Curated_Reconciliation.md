@@ -73,6 +73,7 @@ fi
 ```bash
 audit_write_reconciliation "CURATED" "${RUN_ID}" "${entity_name}" \
   "RAW" "CURATED" \
+  "${source_table}" "${target_table}" \
   "${source_count}" "${target_count}" "${rejected_count}" "${filtered_count}" \
   "$((source_count - target_count))" "${expected_difference_reason}" "${unexplained_difference}" \
   "${recon_status}"
