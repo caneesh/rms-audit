@@ -3,6 +3,12 @@
 How the audit framework handles the many-to-many relationship between Curated and Gold.
 Read this after `AUDIT_DEVELOPER_GUIDE.md` and before running prompts 14–18.
 
+> **Every table and column name in this document is illustrative.** `gold_member_dim`,
+> `curated_plan`, `member_id`, `plan_cd` and the rest are worked-example placeholders, not
+> RMS table names. The real mapping is discovered in prompt 14 and recorded in
+> `docs/GOLD_ANALYSIS.md` and `audit_gold_source_map`. Do not search for these names in the
+> pipeline repo, and do not emit code referencing them.
+
 ---
 
 ## 1. The problem

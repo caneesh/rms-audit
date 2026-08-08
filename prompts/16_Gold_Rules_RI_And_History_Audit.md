@@ -1,5 +1,18 @@
 # Prompt 16 — Gold rules, referential integrity, and history audit (HiveQL)
 
+## Inputs — read these before writing anything
+
+- `docs/GOLD_ANALYSIS.md` (prompt 14) — the rule inventory, RI relationships and their real
+  foreign keys, the SCD action column name, and `${BLOCKING_RULES}`.
+- `${AUDIT_DB}.audit_gold_source_map` — **ENRICH and LOOKUP edges are audited here, as RI
+  rules.** Only DRIVER edges get reconciliation (prompt 18), so every non-driver input to a
+  Gold table needs a matching `RI_*` rule in this prompt or it goes unaudited entirely.
+
+Every rule name, column and join key below is a **placeholder** taken from a worked
+example — `coverage_end_dt`, `member_key`, `scd_action`, `gold_member`. Replace all of them
+with what prompt 14 actually found. Do not emit HQL referencing a column you have not seen
+in the real schema.
+
 ## Rule results (audit_rule_result, layer='GOLD')
 
 Wire rules from prompt 14 into `audit_rule_result` using the same one-pass HiveQL pattern

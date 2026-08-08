@@ -53,7 +53,8 @@ for target_table in $(audit_gold_targets_in_dependency_order); do
           AND sc.watermark_start <= '${watermark_end}')")
 
   if [ ${missing_inputs} -gt 0 ]; then
-    audit_partial_source "${RUN_ID}" "${BATCH_ID}" "Missing ${missing_inputs} Curated input(s)"
+    audit_partial_source "${RUN_ID}" "${BATCH_ID}" "${target_table}" \
+      "Missing ${missing_inputs} Curated input(s)"
     PARTIAL_SOURCES=$((PARTIAL_SOURCES + 1))
     continue
   fi
@@ -87,9 +88,11 @@ for target_table in $(audit_gold_targets_in_dependency_order); do
     "$((input_count - actual_count))" "0" "MATCHED" "COMPLETED" \
     "${stage_start}" "${stage_end}" ""
   
-  # Close every source row opened for this batch, not just the driver
+  # Close every source row opened for this batch, not just the driver.
+  # source_name is the 3rd arg — N rows share this batch_id.
   for curated_source in $(audit_gold_sources_for "${target_table}"); do
-    audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${curated_source}"
+    audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${curated_source}" \
+      "${input_count}" "${actual_count}" "0" "1" "0"
     COMPLETED_SOURCES=$((COMPLETED_SOURCES + 1))
   done
 done

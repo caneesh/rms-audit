@@ -1,5 +1,18 @@
 # Prompt 18 — Curated → Gold reconciliation and end-to-end view
 
+## Inputs — read these before writing anything
+
+- `docs/GOLD_ANALYSIS.md` (prompt 14) — the **per-edge expected relationship sentences**
+  (these become `expected_difference_reason`), the **natural key per entity** (counts here
+  are distinct keys, not rows), and `${REJECTING_RULES}`.
+- `${AUDIT_DB}.audit_gold_source_map` — drives the DRIVER-edge loop and the lineage gate.
+- `docs/GOLD_FANOUT_DESIGN.md` §5.
+
+The reconciliation identity is the one thing in this pack that **cannot be derived from
+the code** — it is a business statement about what the Gold table is supposed to contain.
+If prompt 14 did not produce a sentence for an edge, ask for it. Do not infer one from
+observed counts: that makes the check tautological and it will never catch a regression.
+
 ## Curated → Gold reconciliation (audit_reconciliation)
 
 Same accounting-identity approach as prompt 13, but at a different grain. Read

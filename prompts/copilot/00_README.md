@@ -37,9 +37,19 @@ Small, self-contained prompts to give to Copilot in sequence.
 
 | Prompt | Purpose | Output |
 |--------|---------|--------|
-| 14a | Analyze Gold scripts | Script understanding |
+| 14a | Analyze Gold scripts | `docs/GOLD_ANALYSIS.md` + `sql/audit_gold_source_map_seed.sql` |
 | 15a | Add Gold run/source audit | Gold script changes |
 | 18b | Create reconciliation view | v_reconciliation_daily |
+
+**14a is a hard gate.** 15a and 18b read the two files it writes; they do not have its
+conversation. Load the seed SQL into `audit_gold_source_map` before running 15a, or its
+loops return nothing and the instrumentation silently does no work.
+
+**This track is incomplete for Gold.** There is no short-form prompt for Gold rules and RI
+(numbered 16), Gold lineage (17), or the Gold reconciliation and completion gate (18a) —
+18b only builds the reporting view. To finish Gold, use the numbered prompts
+`prompts/16`, `17` and `18` directly; they assume repo access rather than pasted snippets,
+which suits Copilot working inside the pipeline repo.
 
 ### Step 4: Operations
 

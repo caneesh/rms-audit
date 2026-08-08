@@ -71,6 +71,43 @@ Identify and report:
 - `gold_mbrshp_rms_create_cdc_trigger.sh` / `create_gcf_trg.sh` / `create_gld_strt_trg.sh`
 - `gold_mbrshp_rms_create_check_delete_stoppers.sh`
 
+## Environment facts that prompts 15–18 hardcode
+
+Prompts 15–18 contain placeholder variables that must be replaced with this pipeline's
+real values. Report each one with the file and line you found it in, and say **NOT FOUND**
+rather than guessing — a guessed value here produces instrumentation that runs and writes
+wrong rows.
+
+| Placeholder in 15–18 | What to find |
+|---|---|
+| `${goldTablesFromParams}` | the real variable holding the Gold table list, and where it is set |
+| `${hiveDB_gold}` / `${hiveDB_curated}` | actual Hive database names |
+| `${AUDIT_DB}` | decide and state it; do not let it vary between prompts |
+| `${AUDIT_LIB_PATH}`, `${AUDIT_HQL_PATH}` | where the audit library and its HQL will live |
+| `${watermark_condition}` | the literal SQL predicate that selects a Curated processing window |
+| `${CURATED_WATERMARK_START/END}` | how the window bounds are supplied — trigger file, `.prm`, or derived |
+| `${current_date}`, `load_date` | the real partition column name and format on Gold tables |
+| `hivebeeline` | exact wrapper name and the flags it already passes |
+| `fnLogMsg` | exact signature, and whether it is sourced or defined inline |
+| `${BLOCKING_RULES}`, `${REJECTING_RULES}` | which rule failures should stop a load — ask if unclear, do not invent |
+| SCD action column | the column the SCD logic sets (`scd_action` in prompt 16 is a placeholder) |
+| Hive / Spark version | whether `MERGE INTO` and window functions are available |
+
+Also state, per Gold entity, the **natural key** used for reconciliation counts — prompt 18
+counts distinct keys, not rows, so it needs the actual key column(s).
+
+## Persist the analysis — later prompts read it, not this chat
+
+Prompts 15, 16, 17 and 18 all begin "from prompt 14". If this analysis lives only in the
+chat, a fresh session cannot run them. Write two files into the pipeline repo:
+
+1. **`docs/GOLD_ANALYSIS.md`** — everything below, including the environment-facts table
+   with real values filled in.
+2. **`sql/audit_gold_source_map_seed.sql`** — INSERT statements populating
+   `audit_gold_source_map` from the item-8 edge table, ready to run against the audit DB.
+
+Every later Gold prompt starts by reading these two files.
+
 ## Output
 
 - Shell script inventory with call graph and purpose of each

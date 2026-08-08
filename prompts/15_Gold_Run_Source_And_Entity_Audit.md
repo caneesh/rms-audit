@@ -5,7 +5,21 @@ library (prompt 03b). Layer='GOLD'. Kill switch applies.
 
 Do not change HiveQL transformations or business logic.
 
-**Read `docs/GOLD_FANOUT_DESIGN.md` first.** Curated→Gold is many-to-many, so the batch
+## Inputs — read these before writing anything
+
+1. `docs/GOLD_ANALYSIS.md` (prompt 14) — script inventory, Curated→Gold edge map, and the
+   **real values** for every placeholder used below (`${goldTablesFromParams}`,
+   `${hiveDB_gold}`, `${watermark_condition}`, `fnLogMsg`, …).
+2. `sql/audit_gold_source_map_seed.sql` (prompt 14) — must already be loaded into
+   `${AUDIT_DB}.audit_gold_source_map`, since the loops below read it.
+3. `docs/GOLD_FANOUT_DESIGN.md` — why the batch grain is what it is.
+4. The audit shell library from prompt 03b, including `audit_partial_source` and the
+   `audit_gold_*` map helpers.
+
+If any of these is missing or a placeholder value is unresolved, **stop and say so.** Do
+not substitute a plausible-looking name.
+
+**On the batch grain.** Curated→Gold is many-to-many, so the batch
 grain here is different from Curated's: **one batch per Gold target table, not per source
 read.** A Gold table assembled from five Curated inputs produces five
 `audit_source_control` rows sharing one `BATCH_ID`, and one `audit_stage_summary` row.
@@ -52,7 +66,7 @@ mismatch to catch it. Check every mapped input before building:
           AND sc.watermark_start <= '${watermark_end}')")
 
   if [ ${missing_inputs} -gt 0 ]; then
-    audit_partial_source "${RUN_ID}" "${BATCH_ID}" \
+    audit_partial_source "${RUN_ID}" "${BATCH_ID}" "${gold_table}" \
       "Missing ${missing_inputs} Curated input(s) for ${gold_table}"
     fnLogMsg WARN "Skipping ${gold_table}: ${missing_inputs} Curated input(s) not COMPLETED"
     continue
@@ -102,9 +116,11 @@ audit_write_stage_summary "GOLD" "${RUN_ID}" "${BATCH_ID}" "${driver_table}" \
   "$([ ${expected_count} -eq ${actual_count} ] && echo 'MATCHED' || echo 'MISMATCHED')" \
   "COMPLETED" "${stage_start}" "${stage_end}" "" ""
 
-# Close every source row opened for this batch — not just the driver
+# Close every source row opened for this batch — not just the driver.
+# source_name is the 3rd arg: N rows share this batch_id, so batch_id alone is ambiguous.
 for curated_table in $(audit_gold_sources_for "${gold_table}"); do
-  audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${curated_table}"
+  audit_complete_source "${RUN_ID}" "${BATCH_ID}" "${curated_table}" \
+    "${input_count}" "${actual_count}" "0" "1" "0"
 done
 
 done   # end gold_table loop

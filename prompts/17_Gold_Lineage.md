@@ -2,6 +2,16 @@
 
 Implement lineage so any Gold record can be traced to its MQ-origin file. Two parts:
 
+## Inputs — read these before writing anything
+
+- `docs/GOLD_ANALYSIS.md` (prompt 14) — the natural keys that connect Gold rows back to
+  Curated and Raw, needed for the join chain in part 2.
+- `${AUDIT_DB}.audit_gold_source_map` — `${curated_source_tables}` below is **not** a single
+  table. Under fan-in it is every active input for the Gold table, so write **one edge per
+  mapped source**; the prompt 18 completion gate compares the edge count against this map
+  and fails the run if they disagree. Under fan-out the same Curated batch legitimately
+  appears as the source of several Gold targets — that is expected, not duplication.
+
 ## 1. Batch-level edges (audit_lineage)
 
 For every Gold target written, record one row per contributing Curated source batch.
