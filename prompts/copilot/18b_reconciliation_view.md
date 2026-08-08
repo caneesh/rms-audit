@@ -53,17 +53,25 @@ SELECT
   END AS overall_status
 
 FROM (
-  -- RAW source summary per entity per day
-  SELECT 
+  -- RAW source summary per entity per day.
+  -- Deduplicate to the latest row per (batch_id, source_name) BEFORE summing: the model is
+  -- append-only, so a file with STARTED and COMPLETED rows would otherwise be counted
+  -- twice. Summing ACROSS batches is correct — one entity legitimately has many files a day.
+  SELECT
     source_name AS entity_name,
-    TO_DATE(created_ts) AS load_date,
+    load_date,
     SUM(input_count) AS input_count,
     SUM(processed_count) AS processed_count,
     SUM(rejected_count) AS rejected_count,
-    MAX(status) AS status
-  FROM ${audit_db}.audit_source_control
-  WHERE layer = 'RAW'
-  GROUP BY source_name, TO_DATE(created_ts)
+    MIN(status) AS status
+  FROM (
+    SELECT batch_id, source_name, TO_DATE(created_ts) AS load_date,
+           input_count, processed_count, rejected_count, status,
+           ROW_NUMBER() OVER (PARTITION BY batch_id, source_name ORDER BY created_ts DESC) rn
+    FROM ${audit_db}.audit_source_control
+    WHERE layer = 'RAW') t
+  WHERE rn = 1
+  GROUP BY source_name, load_date
 ) raw_recon
 
 LEFT JOIN (

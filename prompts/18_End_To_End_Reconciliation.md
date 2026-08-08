@@ -275,16 +275,25 @@ SELECT
   END AS overall_status
 
 FROM (
-  -- RAW run summary per entity per day
-  SELECT 
+  -- RAW run summary per entity per day.
+  -- Deduplicate to the latest row per (batch_id, source_name) BEFORE summing. Filtering on
+  -- status='COMPLETED' is not enough: a file retried after a failure has two COMPLETED
+  -- rows and would be counted twice. Summing ACROSS batches is correct — one entity
+  -- legitimately has many files a day.
+  SELECT
     source_name AS entity_name,
-    TO_DATE(created_ts) AS load_date,
+    load_date,
     SUM(input_count) AS total_input,
     SUM(processed_count) AS total_processed,
     SUM(rejected_count) AS total_rejected
-  FROM ${audit_db}.audit_source_control
-  WHERE layer = 'RAW' AND status = 'COMPLETED'
-  GROUP BY source_name, TO_DATE(created_ts)
+  FROM (
+    SELECT batch_id, source_name, TO_DATE(created_ts) AS load_date,
+           input_count, processed_count, rejected_count, status,
+           ROW_NUMBER() OVER (PARTITION BY batch_id, source_name ORDER BY created_ts DESC) rn
+    FROM ${audit_db}.audit_source_control
+    WHERE layer = 'RAW') t
+  WHERE rn = 1 AND status = 'COMPLETED'
+  GROUP BY source_name, load_date
 ) rs
 
 LEFT JOIN ${audit_db}.audit_reconciliation rc

@@ -14,11 +14,16 @@ Add reconciliation check at the end of Curated processing.
 # ============ RECONCILIATION ============
 # All counts come from audit tables - NO new table scans
 
-# Source count (already captured in source_control)
+# Source count (already captured in source_control).
+# Take the LATEST row, not SUM: the model is append-only and both audit_start_source and
+# audit_complete_source write input_count, so SUM returns twice the real count and every
+# reconciliation reports a bogus unexplained difference.
 source_count=$(audit_get_count "
-  SELECT COALESCE(SUM(input_count), 0) 
+  SELECT input_count
   FROM ${AUDIT_DB}.audit_source_control 
-  WHERE run_id='${RUN_ID}' AND batch_id='${BATCH_ID}'
+  WHERE layer='CURATED' AND run_id='${RUN_ID}' AND batch_id='${BATCH_ID}'
+    AND source_name='${source_table}'
+  ORDER BY created_ts DESC LIMIT 1
 ")
 
 # Target count (from stage_summary)
