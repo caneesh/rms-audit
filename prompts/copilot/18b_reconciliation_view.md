@@ -1,23 +1,16 @@
 # Prompt 18b — Create end-to-end reconciliation view
 
-Create a SQL view that shows the full RAW → CURATED → GOLD reconciliation across layers.
+Create a SQL view that shows the full RAW → CURATED → GOLD reconciliation on one line per entity per day.
 
-**This is what support looks at each morning.**
-
-**Grain: one row per Curated→Gold edge per day**, not one row per entity per day. Because
-of fan-out, an entity feeding three Gold tables produces three lines — one per target, each
-with its own status and filter reasons. That is intended: collapsing them would hide which
-target is mismatched. The RAW and CURATED columns repeat across an entity's lines, so do
-not sum them.
+**This is the single row support looks at each morning.**
 
 ```sql
 -- End-to-end reconciliation view
--- One row per Curated→Gold edge per day showing counts across all layers
+-- One row per entity per day showing counts across all layers
 
 CREATE VIEW IF NOT EXISTS ${audit_db}.v_reconciliation_daily AS
 SELECT
   COALESCE(raw_recon.entity_name, cur_recon.entity_name, gold_recon.entity_name) AS entity_name,
-  gold_recon.target_table AS gold_table,
   COALESCE(raw_recon.load_date, cur_recon.load_date, gold_recon.load_date) AS load_date,
   
   -- RAW layer
@@ -53,31 +46,23 @@ SELECT
   END AS overall_status
 
 FROM (
-  -- RAW source summary per entity per day.
-  -- Deduplicate to the latest row per (batch_id, source_name) BEFORE summing: the model is
-  -- append-only, so a file with STARTED and COMPLETED rows would otherwise be counted
-  -- twice. Summing ACROSS batches is correct — one entity legitimately has many files a day.
-  SELECT
+  -- RAW source summary per entity per day
+  SELECT 
     source_name AS entity_name,
-    load_date,
+    TO_DATE(created_ts) AS load_date,
     SUM(input_count) AS input_count,
     SUM(processed_count) AS processed_count,
     SUM(rejected_count) AS rejected_count,
-    MIN(status) AS status
-  FROM (
-    SELECT batch_id, source_name, TO_DATE(created_ts) AS load_date,
-           input_count, processed_count, rejected_count, status,
-           ROW_NUMBER() OVER (PARTITION BY batch_id, source_name ORDER BY created_ts DESC) rn
-    FROM ${audit_db}.audit_source_control
-    WHERE layer = 'RAW') t
-  WHERE rn = 1
-  GROUP BY source_name, load_date
+    MAX(status) AS status
+  FROM ${audit_db}.audit_source_control
+  WHERE layer = 'RAW'
+  GROUP BY source_name, TO_DATE(created_ts)
 ) raw_recon
 
 LEFT JOIN (
   -- RAW → CURATED reconciliation
   SELECT 
-    entity_name, source_name, target_table,
+    entity_name,
     TO_DATE(created_ts) AS load_date,
     source_count, target_count, rejected_count, filtered_count,
     expected_difference_reason, unexplained_difference, status
@@ -88,19 +73,16 @@ LEFT JOIN (
   AND raw_recon.load_date = cur_recon.load_date
 
 LEFT JOIN (
-  -- CURATED → GOLD reconciliation, one row per edge
+  -- CURATED → GOLD reconciliation
   SELECT 
-    entity_name, source_name, target_table,
+    entity_name,
     TO_DATE(created_ts) AS load_date,
     source_count, target_count, rejected_count, filtered_count,
     expected_difference_reason, unexplained_difference, status
   FROM ${audit_db}.audit_reconciliation
   WHERE from_layer = 'CURATED' AND to_layer = 'GOLD'
 ) gold_recon
-  -- Chain on the Curated TABLE: the target of RAW→CURATED is the source of CURATED→GOLD.
-  -- Matching on entity_name alone would cross-join an entity against every Gold edge
-  -- that happens to share its name.
-  ON cur_recon.target_table = gold_recon.source_name
+  ON cur_recon.entity_name = gold_recon.entity_name 
   AND cur_recon.load_date = gold_recon.load_date;
 ```
 
@@ -110,12 +92,10 @@ Also create a morning health check query:
 -- Morning health check: yesterday's run status
 SELECT 
   entity_name,
-  gold_table,
   raw_input,
   curated_count,
   gold_count,
   curated_filter_reasons,
-  gold_filter_reasons,
   curated_unexplained,
   gold_unexplained,
   overall_status
@@ -128,11 +108,7 @@ ORDER BY
     WHEN 'EXPLAINED' THEN 3 
     ELSE 4 
   END,
-  entity_name,
-  gold_table;
+  entity_name;
 ```
-
-An entity with fan-out shows one line per Gold target, so a single mismatched target
-surfaces on its own line instead of being averaged away.
 
 Create both the view DDL and the health check query.

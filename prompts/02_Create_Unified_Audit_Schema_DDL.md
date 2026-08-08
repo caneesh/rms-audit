@@ -10,9 +10,7 @@ and locations (use configurable placeholders for locations).
 - **Append-only event model.** Tables have `created_ts` only — NO `updated_ts`, no updates.
   Status transitions are new rows; consumers read the latest row per key. Put this in the
   table comments.
-- Every **event** table has a `layer` STRING column ('RAW' | 'CURATED' | 'GOLD').
-  `audit_gold_source_map` is reference data and is exempt from this and from the
-  append-only rule — see its section below.
+- Every table has a `layer` STRING column ('RAW' | 'CURATED' | 'GOLD').
 - STRING for ids and statuses, TIMESTAMP for times, BIGINT for counts/sizes/durations.
 - Table and column comments on everything. Practical partitioning (e.g., a load_date
   partition on high-volume tables like error_detail and rule_result); do not over-partition.
@@ -64,18 +62,10 @@ status, start_time, end_time, duration_ms, error_message, created_ts
 (all counts BIGINT)
 
 ### audit_reconciliation
-(one row per **edge**: a source table → target table pair, not per layer — see
-`docs/GOLD_FANOUT_DESIGN.md` §5. Curated→Gold is many-to-many, so layer grain has no
-checkable identity.)
 layer, run_id, entity_name, from_layer, to_layer,
-source_name STRING (source table for this edge), target_table STRING (target table for this edge),
 source_count BIGINT, target_count BIGINT, rejected_count BIGINT, filtered_count BIGINT,
 difference BIGINT, expected_difference_reason STRING, unexplained_difference BIGINT,
 status ('MATCHED'|'EXPLAINED'|'MISMATCHED'), created_ts
-
-Comment on `source_count` / `target_count`: these are **distinct natural keys**, not
-physical row counts. Row counts break under SCD2 (version rows inflate the target) and
-under fan-in enrichment (multiple rows per key inflate the source).
 
 ### audit_lineage
 (batch-level edges only — never row-level)
@@ -88,32 +78,8 @@ message_id STRING, record_index BIGINT, error_type, error_code, error_message,
 record_payload STRING (nullable — capture is config-controlled, truncated, masked),
 error_timestamp, created_ts
 
-### audit_gold_source_map
-**Reference/config table, not an event table.** This one is the exception to the global
-rules above: no `layer` column, no append-only event model — it is small, hand-maintained
-reference data that is replaced when the Curated→Gold mapping changes. Populated from the
-prompt 14 analysis. See `docs/GOLD_FANOUT_DESIGN.md` §4.
-
-gold_table STRING, curated_table STRING,
-source_role STRING ('DRIVER'|'ENRICH'|'LOOKUP'),
-join_key STRING, expected_cardinality STRING,
-depends_on STRING (nullable — Gold table that must be built first),
-is_active STRING ('Y'|'N'), created_ts
-
-Column comments must state:
-- `source_role` — DRIVER sources determine the target's row population and get a
-  reconciliation identity. ENRICH/LOOKUP sources add columns, not rows, and get
-  referential-integrity rules (`audit_rule_result.rule_type='RI'`) instead. All roles get
-  a `audit_source_control` row and a `audit_lineage` edge regardless.
-- `depends_on` — drives Gold build ordering when one Gold table's RI checks join another.
-
-Do not partition this table. Seed it with an INSERT script derived from prompt 14 and keep
-that script in the repo alongside the DDL.
-
 ## Deliver
 1. One SQL file per table + one master file (database + all tables, in order).
-2. A seed INSERT script for `audit_gold_source_map`, derived from the prompt 14 analysis.
-3. Commented-out DROP statements as rollback examples only.
-4. DESCRIBE FORMATTED validation queries.
-5. A short note explaining partitioning and storage-format choices, and why
-   `audit_gold_source_map` is exempt from the append-only model.
+2. Commented-out DROP statements as rollback examples only.
+3. DESCRIBE FORMATTED validation queries.
+4. A short note explaining partitioning and storage-format choices.

@@ -131,7 +131,7 @@ blocking_failures=$(audit_get_count "
 ")
 if [ ${blocking_failures} -gt 0 ]; then
   fnLogMsg ERROR "Blocking rule failures detected, skipping MERGE"
-  audit_fail_source "${RUN_ID}" "${BATCH_ID}" "${source_table}" "Blocking rule failures"
+  audit_fail_source "${RUN_ID}" "${BATCH_ID}" "Blocking rule failures"
   continue  # skip to next table
 fi
 ```

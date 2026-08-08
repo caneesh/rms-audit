@@ -37,24 +37,9 @@ Small, self-contained prompts to give to Copilot in sequence.
 
 | Prompt | Purpose | Output |
 |--------|---------|--------|
-| 14a | Analyze Gold scripts | `docs/GOLD_ANALYSIS.md` + `sql/audit_gold_source_map_seed.sql` |
+| 14a | Analyze Gold scripts | Script understanding |
 | 15a | Add Gold run/source audit | Gold script changes |
-| 16a | Create Gold rule + RI HQL, SCD merge summary | `audit_rules_gold_${table}.hql` |
-| 17a | Add Gold lineage | Lineage INSERT + `docs/LINEAGE.md` |
-| 18a | Add Gold reconciliation + completion gate | Recon logic, gate |
 | 18b | Create reconciliation view | v_reconciliation_daily |
-
-**14a is a hard gate.** Every Gold prompt after it reads the two files it writes; they do
-not have its conversation. Load the seed SQL into `audit_gold_source_map` before running
-15a, or the loops in 15a/16a/17a/18a return nothing and the instrumentation silently does
-no work.
-
-**Run the Gold prompts in order** — 16a reads batch ids that 15a creates, 17a's lineage is
-verified by 18a's gate, and 18b reports on rows 18a writes.
-
-Read `docs/GOLD_FANOUT_DESIGN.md` before starting Gold. Curated→Gold is many-to-many and
-the batch grain differs from Curated's: one batch per Gold *target*, with N source rows
-sharing it.
 
 ### Step 4: Operations
 
@@ -82,17 +67,11 @@ scripts/audit/
 ├── audit_functions.sh
 └── hql/
     ├── audit_rules_template.hql
-    ├── audit_rules_gold_${table}.hql
     ├── audit_ri_checks.hql
     └── audit_sample_keys.hql
 
 sql/
-├── audit_gold_source_map_seed.sql
 └── v_reconciliation_daily.sql
-
-docs/
-├── GOLD_ANALYSIS.md
-└── LINEAGE.md
 
 ops/
 └── audit_queries.sql

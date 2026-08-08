@@ -17,31 +17,7 @@ Identify and report:
 
 ## Data flow (per Gold table)
 
-8. **The Curated → Gold mapping.** This is the load-bearing deliverable of this prompt —
-   everything in prompts 15–18 keys off it. The relationship is **many-to-many**, not
-   1-to-many: one Gold table is assembled from several Curated tables (fan-in) *and* one
-   Curated table feeds several Gold tables (fan-out). Read
-   `docs/GOLD_FANOUT_DESIGN.md` before answering this one.
-
-   Produce one row per (gold_table, curated_table) edge:
-
-   | gold_table | curated_table | source_role | join_key | expected_cardinality | depends_on |
-   |---|---|---|---|---|---|
-   | gold_member_dim | curated_member | DRIVER | member_id | 1:1 on key | |
-   | gold_member_dim | curated_plan | LOOKUP | plan_cd | N:1 | |
-
-   - `source_role` — **DRIVER** if that source's row population determines the Gold
-     table's row population; **ENRICH** if it adds columns to driver rows; **LOOKUP** if
-     it is a dimension/code join. Most Gold tables have exactly one DRIVER. If you find a
-     Gold table with two or more genuine drivers (a union or a full outer join), flag it
-     explicitly — it needs a hand-written reconciliation identity.
-   - `expected_cardinality` — what the join is *supposed* to do (1:1 on key, N:1, 1:N).
-     A LOOKUP that turns out to be 1:N is a row-multiplication bug waiting to happen; say so.
-   - `depends_on` — another Gold table that must be built first, e.g. because this table's
-     RI checks join it.
-
-   This table becomes the seed data for `audit_gold_source_map` (prompt 02).
-
+8. The Curated → Gold mapping: which Curated tables feed which Gold tables.
 9. How history is maintained: SCD type per table (1/2/other), PIT tables if any.
 10. Effective/expiry date handling: how are versions opened and closed?
 11. How Gold writes physically happen: partition overwrite? append? MERGE?
@@ -71,58 +47,12 @@ Identify and report:
 - `gold_mbrshp_rms_create_cdc_trigger.sh` / `create_gcf_trg.sh` / `create_gld_strt_trg.sh`
 - `gold_mbrshp_rms_create_check_delete_stoppers.sh`
 
-## Environment facts that prompts 15–18 hardcode
-
-Prompts 15–18 contain placeholder variables that must be replaced with this pipeline's
-real values. Report each one with the file and line you found it in, and say **NOT FOUND**
-rather than guessing — a guessed value here produces instrumentation that runs and writes
-wrong rows.
-
-| Placeholder in 15–18 | What to find |
-|---|---|
-| `${goldTablesFromParams}` | the real variable holding the Gold table list, and where it is set |
-| `${hiveDB_gold}` / `${hiveDB_curated}` | actual Hive database names |
-| `${AUDIT_DB}` | decide and state it; do not let it vary between prompts |
-| `${AUDIT_LIB_PATH}`, `${AUDIT_HQL_PATH}` | where the audit library and its HQL will live |
-| `${watermark_condition}` | the literal SQL predicate that selects a Curated processing window |
-| `${CURATED_WATERMARK_START/END}` | how the window bounds are supplied — trigger file, `.prm`, or derived |
-| `${current_date}`, `load_date` | the real partition column name and format on Gold tables |
-| `hivebeeline` | exact wrapper name and the flags it already passes |
-| `fnLogMsg` | exact signature, and whether it is sourced or defined inline |
-| `${BLOCKING_RULES}`, `${REJECTING_RULES}`, `${FILTERING_RULES}` | which rule failures stop a load, which reject rows, which are intentional filters — ask if unclear, do not invent |
-| SCD action column | the column the SCD logic sets (`scd_action` in prompt 16 is a placeholder) |
-| Hive / Spark version | whether `MERGE INTO` and window functions are available |
-
-Also state, per Gold entity, the **natural key** used for reconciliation counts — prompt 18
-counts distinct keys, not rows, so it needs the actual key column(s).
-
-## Persist the analysis — later prompts read it, not this chat
-
-Prompts 15, 16, 17 and 18 all begin "from prompt 14". If this analysis lives only in the
-chat, a fresh session cannot run them. Write two files into the pipeline repo:
-
-1. **`docs/GOLD_ANALYSIS.md`** — everything below, including the environment-facts table
-   with real values filled in.
-2. **`sql/audit_gold_source_map_seed.sql`** — INSERT statements populating
-   `audit_gold_source_map` from the item-8 edge table, ready to run against the audit DB.
-
-Every later Gold prompt starts by reading these two files.
-
 ## Output
 
 - Shell script inventory with call graph and purpose of each
-- **The Curated→Gold edge table from item 8** — one row per (gold_table, curated_table)
-  with `source_role`, `join_key`, `expected_cardinality`, `depends_on`. This seeds
-  `audit_gold_source_map`.
-- **Per DRIVER edge: the expected source→target relationship in one sentence**, phrased in
-  distinct natural keys rather than row counts — e.g. "distinct member keys in
-  curated_member for the window = member keys touched in gold_member_dim". This becomes
-  `expected_difference_reason` in prompt 18. Fan-out means each edge gets its own
-  sentence; never one per Curated table.
-- Per-Gold-table: SCD type, HQL file locations, build order implied by `depends_on`
+- Per-Gold-table: Curated sources, SCD type, HQL file locations
 - Rule inventory from HQL files
-- RI relationships and their keys — note which ones correspond to ENRICH/LOOKUP edges,
-  since those are audited as RI rules instead of reconciliation
+- RI relationships and their keys
 - Drop/filter inventory with reasons
 - Schema-change feasibility
 - Traceability key mapping

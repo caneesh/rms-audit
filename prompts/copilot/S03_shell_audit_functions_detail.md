@@ -28,21 +28,16 @@ audit_start_source() {
   # ... implement similar to audit_start_run
 }
 
-# NOTE: source_name is required on every close/fail/partial call. Under Gold fan-in a
-# single batch_id has N open source rows (one per Curated input), so batch_id alone no
-# longer identifies which row to close. See docs/GOLD_FANOUT_DESIGN.md.
-
 audit_complete_source() {
   [ "${AUDIT_ENABLED}" != "true" ] && return 0
   
   local run_id="$1"
   local batch_id="$2"
-  local source_name="$3"
-  local input_count="$4"
-  local processed_count="$5"
-  local rejected_count="$6"
-  local completed_targets="$7"
-  local failed_targets="$8"
+  local input_count="$3"
+  local processed_count="$4"
+  local rejected_count="$5"
+  local completed_targets="$6"
+  local failed_targets="$7"
   
   # INSERT new row with status=COMPLETED
 }
@@ -52,24 +47,9 @@ audit_fail_source() {
   
   local run_id="$1"
   local batch_id="$2"
-  local source_name="$3"
-  local error_message="$4"
+  local error_message="$3"
   
   # INSERT new row with status=FAILED
-}
-
-audit_partial_source() {
-  [ "${AUDIT_ENABLED}" != "true" ] && return 0
-  
-  local run_id="$1"
-  local batch_id="$2"
-  local source_name="$3"
-  local reason="$4"        # e.g. "Missing Curated inputs: curated_plan,curated_addr"
-  
-  # INSERT new row with status=PARTIAL and error_message=reason.
-  # PARTIAL means "nothing broke, but this unit was not fully processed" — a Gold target
-  # skipped by the fan-in gate. It must block a COMPLETED run without being reported as
-  # a failure.
 }
 
 # ============ STAGE SUMMARY ============
@@ -134,25 +114,18 @@ audit_write_reconciliation() {
   local entity_name="$3"
   local from_layer="$4"
   local to_layer="$5"
-  local source_name="$6"    # source TABLE for this edge, e.g. curated_member
-  local target_table="$7"   # target TABLE for this edge, e.g. gold_member_dim
-  local source_count="$8"
-  local target_count="$9"
-  local rejected_count="${10}"
-  local filtered_count="${11}"
-  local difference="${12}"
-  local expected_reason="${13}"
-  local unexplained="${14}"
-  local status="${15}"  # MATCHED, EXPLAINED, MISMATCHED
+  local source_count="$6"
+  local target_count="$7"
+  local rejected_count="$8"
+  local filtered_count="$9"
+  local difference="${10}"
+  local expected_reason="${11}"
+  local unexplained="${12}"
+  local status="${13}"  # MATCHED, EXPLAINED, MISMATCHED
   
   local sql="INSERT INTO ${AUDIT_DB}.audit_reconciliation VALUES (...)"
   ${AUDIT_BEELINE_CMD} -e "$sql" 2>/dev/null
 }
-
-# One row per (source table → target table) EDGE. Curated→Gold is many-to-many, so
-# (entity_name, from_layer, to_layer) does not identify a reconciliation row: a Curated
-# table feeding three Gold tables writes three rows that differ only by target_table.
-# source_count / target_count are DISTINCT NATURAL KEYS, not physical rows.
 
 # ============ LINEAGE ============
 
@@ -208,52 +181,6 @@ audit_write_error() {
     fnLogMsg ERROR "audit_write_error failed"
   }
 }
-
-# ============ GOLD SOURCE MAP HELPERS ============
-# Read audit_gold_source_map (prompt 02). Gold instrumentation (prompt 15) and
-# reconciliation (prompt 18) drive their loops from these — do not hardcode the mapping.
-# Each returns whitespace-separated values on stdout, empty on no match.
-
-audit_get_value() {
-  # Like audit_get_count but for non-numeric scalars (table names, roles).
-  local query="$1"
-  ${AUDIT_BEELINE_CMD} --silent=true --outputformat=tsv2 -e "$query" 2>/dev/null | tail -1
-}
-
-audit_gold_sources_for() {
-  # ALL active Curated inputs for a Gold table — DRIVER, ENRICH and LOOKUP alike.
-  # Every one gets a source_control row and a lineage edge.
-  local gold_table="$1"
-  audit_get_value "SELECT CONCAT_WS(' ', COLLECT_LIST(curated_table))
-                   FROM ${AUDIT_DB}.audit_gold_source_map
-                   WHERE gold_table='${gold_table}' AND is_active='Y'"
-}
-
-audit_gold_driver_for() {
-  # The single DRIVER input — the one whose row population determines the Gold table's.
-  # Only this one gets a reconciliation identity; the rest are audited as RI rules.
-  local gold_table="$1"
-  audit_get_value "SELECT curated_table FROM ${AUDIT_DB}.audit_gold_source_map
-                   WHERE gold_table='${gold_table}' AND is_active='Y'
-                     AND source_role='DRIVER' LIMIT 1"
-}
-
-audit_gold_targets_in_dependency_order() {
-  # Gold tables ordered so that anything named in depends_on is built first.
-  # Our depends_on graph is one level deep (a fact table depending on its dimensions).
-  # If prompt 14 finds deeper nesting, replace this with a real topological sort and say so.
-  audit_get_value "SELECT CONCAT_WS(' ', COLLECT_LIST(gold_table)) FROM (
-                     SELECT DISTINCT gold_table,
-                            CASE WHEN depends_on IS NULL OR depends_on='' THEN 0 ELSE 1 END AS lvl
-                     FROM ${AUDIT_DB}.audit_gold_source_map WHERE is_active='Y'
-                     ORDER BY lvl, gold_table) t"
-}
 ```
 
 Complete all function implementations with proper INSERT statements.
-
-**Cache the map lookups.** These run per Gold table inside the main loop; a beeline round
-trip each is wasteful. Read `audit_gold_source_map` once in `audit_init` into shell
-variables or a temp file, and have these helpers read that. If you do, say so in the
-output — a stale cache within a run is fine (the map is reference data, not events), but
-it must be refreshed per run.

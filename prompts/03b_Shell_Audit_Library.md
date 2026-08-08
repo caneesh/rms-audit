@@ -17,7 +17,6 @@ audit_fail_run       — INSERT into audit_run_control (status=FAILED, error_mes
 audit_start_source   — INSERT into audit_source_control (status=STARTED)
 audit_complete_source — INSERT into audit_source_control (status=COMPLETED, counts)
 audit_fail_source    — INSERT into audit_source_control (status=FAILED)
-audit_partial_source — INSERT into audit_source_control (status=PARTIAL, reason)
 
 audit_write_stage_summary — INSERT into audit_stage_summary
 audit_write_rule_results  — INSERT into audit_rule_result (batch of rules)
@@ -27,31 +26,8 @@ audit_write_lineage       — INSERT into audit_lineage
 audit_write_error         — INSERT into audit_error_detail
 
 audit_get_count      — Execute COUNT(*) query, return result to caller
-audit_get_value      — Execute a scalar query, return non-numeric result (table names)
 audit_check_prior_run — Query audit_source_control for prior status (for rerun logic)
-
-audit_gold_sources_for              — All active Curated inputs for a Gold table
-audit_gold_driver_for               — The single DRIVER input for a Gold table
-audit_gold_targets_in_dependency_order — Gold tables ordered by depends_on
 ```
-
-### Signatures that differ from the obvious
-
-Two functions carry parameters that only make sense once you have read
-`docs/GOLD_FANOUT_DESIGN.md`. Get these wrong and Gold instrumentation silently writes
-unusable rows:
-
-- `audit_complete_source` / `audit_fail_source` / `audit_partial_source` take
-  **`source_name` as their third argument**, after `run_id` and `batch_id`. Under Gold
-  fan-in one batch has N open source rows (one per Curated input), so `batch_id` alone
-  does not identify which row to close.
-- `audit_write_reconciliation` takes **`source_name` and `target_table`** after
-  `to_layer`. Reconciliation is per (source table → target table) edge, not per layer,
-  because one Curated table feeds several Gold tables with different identities.
-
-The `audit_gold_*` helpers read the `audit_gold_source_map` table from prompt 02. They
-exist so that Gold instrumentation never hardcodes the Curated→Gold mapping. Cache the map
-once per run in `audit_init` rather than issuing a beeline round trip per Gold table.
 
 ## Rules
 
