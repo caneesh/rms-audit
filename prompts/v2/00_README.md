@@ -115,8 +115,11 @@ When those prompts are reached they will need changes this set does not make:
   read at edge grain. The `v_reconciliation_daily` view is one row per Curated→Gold edge per
   day, not per entity per day; its RAW rollup must deduplicate to the latest row per
   `(batch_id, source_name)` before summing, or a retried file is counted twice.
-- **20 (tests)** — add a test asserting that reconciliation on a clean batch reports
-  `unexplained_difference = 0`. That test would have caught the bug R05 fixes.
+- **20 (tests)** — superseded by **`docs/AUDIT_TEST_CASES.md`**. `prompts/20` is entirely
+  ScalaTest, so it covers Raw only; the shell layers had no coverage at all, which is why
+  every defect R05 fixes reached shipped code. The new document covers all three layers in
+  three tiers (static checks, Scala unit tests, integration assertions against the test Hive
+  database) and maps each known defect to the case that now catches it.
 - **21 (final review)** — its checklist says "8 audit tables"; expect nine objects.
 
 Gold must land first. Do not start Phase 4 before G18 is verified.
